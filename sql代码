@@ -1,0 +1,309 @@
+-- 创建数据库
+CREATE DATABASE IF NOT EXISTS taobao_data
+DEFAULT CHARACTER SET utf8mb4
+DEFAULT COLLATE utf8mb4_unicode_ci;
+
+USE taobao_data;
+
+-- 1. users 用户基础信息表
+DROP TABLE IF EXISTS users;
+CREATE TABLE users (
+    user_id CHAR(10) PRIMARY KEY COMMENT '用户唯一编号',
+    age TINYINT COMMENT '年龄',
+    gender VARCHAR(4) COMMENT '性别',
+    province VARCHAR(20) COMMENT '省份',
+    city VARCHAR(20) COMMENT '城市',
+    registration_date DATETIME COMMENT '注册时间',
+    member_level VARCHAR(16) COMMENT '会员等级',
+    account_balance DECIMAL(14,2) COMMENT '账户余额',
+    credit_score INT COMMENT '信用分'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户基础信息';
+
+-- 2. user_features 用户消费特征表
+DROP TABLE IF EXISTS user_features;
+CREATE TABLE user_features (
+    user_id CHAR(10) PRIMARY KEY COMMENT '用户编号',
+    total_spent DECIMAL(16,2) COMMENT '累计消费金额',
+    order_count INT COMMENT '下单总次数',
+    completed_orders INT COMMENT '完成订单数',
+    avg_order_amount DECIMAL(14,2) COMMENT '平均订单金额',
+    browse_count INT COMMENT '浏览次数',
+    click_count INT COMMENT '点击次数',
+    favorite_count INT COMMENT '收藏次数',
+    cart_count INT COMMENT '加购次数',
+    days_since_last_order INT COMMENT '距上次下单天数',
+    order_frequency DECIMAL(10,4) COMMENT '下单频率',
+    repurchase_indicator TINYINT COMMENT '复购标识 0/1',
+    purchase_intent DECIMAL(10,4) COMMENT '购买意愿系数',
+    consumption_level VARCHAR(8) COMMENT '消费水平：低/中/高',
+    member_level_score INT COMMENT '会员分值',
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户消费特征指标';
+
+-- 3. user_behaviors 用户行为日志表（数据量大）
+DROP TABLE IF EXISTS user_behaviors;
+CREATE TABLE user_behaviors (
+    behavior_id CHAR(12) PRIMARY KEY COMMENT '行为记录ID',
+    user_id CHAR(10) NOT NULL COMMENT '用户编号',
+    product_id CHAR(8) NOT NULL COMMENT '商品编号',
+    behavior_type VARCHAR(10) COMMENT '行为类型：浏览/收藏/点击/加购',
+    behavior_time DATETIME COMMENT '行为发生时间',
+    duration_seconds INT COMMENT '停留时长(秒)',
+    INDEX idx_uid (user_id),
+    INDEX idx_pid (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户行为明细表';
+
+-- 4. products 商品基础信息表
+DROP TABLE IF EXISTS products;
+CREATE TABLE products (
+    product_id CHAR(8) PRIMARY KEY COMMENT '商品编号',
+    product_name VARCHAR(128) COMMENT '商品名称',
+    category VARCHAR(20) COMMENT '商品类目',
+    brand VARCHAR(20) COMMENT '品牌',
+    price DECIMAL(14,2) COMMENT '商品标价',
+    sales_count INT COMMENT '销量'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品基础档案';
+
+-- 5. product_features 商品运营指标表
+DROP TABLE IF EXISTS product_features;
+CREATE TABLE product_features (
+    product_id CHAR(8) PRIMARY KEY COMMENT '商品编号',
+    total_revenue DECIMAL(18,2) COMMENT '累计营收',
+    total_sales INT COMMENT '销售总量',
+    completed_count INT COMMENT '成交订单数',
+    cancel_count INT COMMENT '取消订单数',
+    cart_count INT COMMENT '加购人数',
+    collect_count INT COMMENT '收藏人数',
+    browse_count INT COMMENT '浏览量',
+    click_count INT COMMENT '点击量',
+    conversion_rate DECIMAL(10,4) COMMENT '转化率',
+    avg_review_score DECIMAL(4,2) COMMENT '平均评分',
+    popularity_score DECIMAL(10,4) COMMENT '人气得分',
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品运营数据';
+
+-- 6. orders 订单明细表（最大数据表）
+DROP TABLE IF EXISTS orders;
+CREATE TABLE orders (
+    order_id CHAR(16) PRIMARY KEY COMMENT '订单编号',
+    user_id CHAR(10) NOT NULL COMMENT '用户编号',
+    product_id CHAR(8) NOT NULL COMMENT '商品编号',
+    quantity INT COMMENT '购买数量',
+    order_date DATETIME COMMENT '下单时间',
+    order_status VARCHAR(12) COMMENT '订单状态：已付款/已收货/已完成/已取消/已退款',
+    payment_method VARCHAR(12) COMMENT '支付方式',
+    unit_price DECIMAL(14,2) COMMENT '单品单价',
+    total_amount DECIMAL(16,2) COMMENT '订单原价总额',
+    discount DECIMAL(14,2) COMMENT '优惠金额',
+    actual_payment DECIMAL(16,2) COMMENT '实付金额',
+    delivery_date DATETIME COMMENT '发货时间',
+    receive_date DATETIME COMMENT '确认收货时间',
+    review_score TINYINT COMMENT '评价星级1-5',
+    review_content TEXT COMMENT '长文本评价内容，支持大量文字',
+    INDEX idx_uid (user_id),
+    INDEX idx_pid (product_id),
+    INDEX idx_orderdate (order_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单详情主表';
+
+
+-- ========================================================================
+-- 第二部分：多表关联取数查询（在数据导入完成后执行）
+-- ========================================================================
+-- 说明：把项目分析中"分表读取 + Pandas merge"的部分关联取数逻辑下沉到SQL
+--
+-- 【全库统一口径】有效订单 = 状态属于 ('已付款','已发货','已收货','已完成')
+--       即剔除 '已取消' / '已退款'，与 Python 端各分析脚本保持一致，
+--       保证 GMV / 营收 / 复购率等指标在 SQL 与 Python 两侧可对账。
+-- ========================================================================
+
+-- ------------------------------------------------------------------------
+-- 0) 导入校验：确认 6 张表行数与 Python 脚本导入口径一致
+-- ------------------------------------------------------------------------
+SELECT 'users' AS tbl, COUNT(*) AS rows_cnt FROM users
+UNION ALL SELECT 'user_features', COUNT(*) FROM user_features
+UNION ALL SELECT 'user_behaviors', COUNT(*) FROM user_behaviors
+UNION ALL SELECT 'products', COUNT(*) FROM products
+UNION ALL SELECT 'product_features', COUNT(*) FROM product_features
+UNION ALL SELECT 'orders', COUNT(*) FROM orders;
+
+-- ------------------------------------------------------------------------
+-- 1) 三表 JOIN：订单宽表（orders × users × products）
+--    用途：单笔订单带上用户画像与商品维度，供客单价 / 地域 / 类目下钻。
+-- ------------------------------------------------------------------------
+SELECT
+    o.order_id,
+    o.user_id,
+    u.age, u.gender, u.province, u.member_level,
+    o.product_id,
+    p.product_name, p.category, p.brand,
+    o.quantity,
+    o.total_amount,
+    o.discount,
+    o.actual_payment,
+    DATE(o.order_date) AS order_date
+FROM orders o
+LEFT JOIN users    u ON o.user_id    = u.user_id
+LEFT JOIN products p ON o.product_id = p.product_id
+WHERE o.order_status IN ('已付款','已发货','已收货','已完成')
+ORDER BY o.order_date DESC
+LIMIT 100;
+
+-- ------------------------------------------------------------------------
+-- 2) 多表聚合下钻：省份 × 会员等级 的买家 / 订单 / 营收贡献
+--    用途：定位"营收主力省份 + 高价值会员"组合，支撑运营资源投放。
+-- ------------------------------------------------------------------------
+SELECT
+    u.province,
+    u.member_level,
+    COUNT(DISTINCT o.user_id)       AS buyer_cnt,
+    COUNT(o.order_id)               AS order_cnt,
+    ROUND(SUM(o.actual_payment),2)  AS revenue
+FROM orders o
+JOIN users u ON o.user_id = u.user_id
+WHERE o.order_status IN ('已付款','已发货','已收货','已完成')
+GROUP BY u.province, u.member_level
+ORDER BY revenue DESC;
+
+-- ------------------------------------------------------------------------
+-- 3) 三表关联定位"沉睡高潜用户"：用户画像 × 消费特征 × 订单（LEFT + 子查询）
+--    用途：找出从未有效成交、但发生过"加购"行为的用户 → 唤醒名单。
+-- ------------------------------------------------------------------------
+SELECT
+    u.user_id,
+    u.age, u.gender, u.member_level,
+    f.consumption_level,
+    f.total_spent
+FROM users u
+JOIN user_features f ON u.user_id = f.user_id
+LEFT JOIN (
+    SELECT DISTINCT user_id
+    FROM orders
+    WHERE order_status IN ('已付款','已发货','已收货','已完成')
+) vo ON vo.user_id = u.user_id
+WHERE vo.user_id IS NULL
+  AND EXISTS (
+        SELECT 1 FROM user_behaviors b
+        WHERE b.user_id = u.user_id AND b.behavior_type = '加购'
+  )
+ORDER BY f.consumption_level DESC;   -- 优先处理高消费等级的用户
+
+-- ------------------------------------------------------------------------
+-- 4) 商品类目多表汇总：orders × products × product_features
+--    用途：类目级 买家数/订单/营收 与 商品特征表(转化率/评分) 对账分析，
+--         是 Python 端商品 ABC 分层的前置 SQL 版。
+-- ------------------------------------------------------------------------
+SELECT
+    p.category,
+    COUNT(DISTINCT o.user_id)        AS buyers,
+    COUNT(o.order_id)                AS order_cnt,
+    ROUND(SUM(o.actual_payment),2)   AS revenue,
+    ROUND(AVG(pf.conversion_rate),4) AS avg_conv,
+    ROUND(AVG(pf.avg_review_score),2)AS avg_review
+FROM orders o
+JOIN products p          ON o.product_id = p.product_id
+LEFT JOIN product_features pf ON pf.product_id = p.product_id
+WHERE o.order_status IN ('已付款','已发货','已收货','已完成')
+GROUP BY p.category
+ORDER BY revenue DESC;
+
+-- ------------------------------------------------------------------------
+-- 5) 行为 → 订单归因：加购了却从未成交的用户（行为表 × 有效订单去重子查询）
+--    用途：输出"加购未转化"召回名单，对应运营方案里的临门转化策略。
+-- ------------------------------------------------------------------------
+SELECT
+    b.user_id,
+    COUNT(DISTINCT b.product_id) AS cart_products
+FROM user_behaviors b
+LEFT JOIN (
+    SELECT DISTINCT user_id
+    FROM orders
+    WHERE order_status IN ('已付款','已发货','已收货','已完成')
+) vo ON vo.user_id = b.user_id
+WHERE b.behavior_type = '加购'
+  AND vo.user_id IS NULL
+GROUP BY b.user_id
+ORDER BY cart_products DESC;
+
+-- ------------------------------------------------------------------------
+-- 6) 窗口函数：单表内做"用户内排序"，算相邻订单间隔（复购速度）
+--    用途：刻画用户下单节奏，作为 Python 端复购模型"频次类"特征的 SQL 版参照。
+-- ------------------------------------------------------------------------
+WITH t AS (
+    SELECT
+        user_id, order_id, order_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY user_id
+            ORDER BY order_date, order_id
+        ) AS rn,
+        LAG(order_date) OVER (
+            PARTITION BY user_id
+            ORDER BY order_date, order_id
+        ) AS prev_order_date
+    FROM orders
+    WHERE order_status IN ('已付款','已发货','已收货','已完成')
+)
+SELECT
+    user_id, order_id,
+    order_date, prev_order_date,
+    DATEDIFF(order_date, prev_order_date) AS gap_days
+FROM t
+WHERE rn >= 2            -- 只看第 2 单及以后，即真正"复购"间隔
+ORDER BY gap_days DESC
+LIMIT 20;
+
+-- ------------------------------------------------------------------------
+-- 7) RFM 简版分群：聚合 CTE × users × user_features 三层联动
+--    用途：在 SQL 层直接产出 R(近度)/F(频次)/M(金额) 基础分群，
+--         与 Python 端 ops_plan 的 V/P/S 分层互为校验。
+-- ------------------------------------------------------------------------
+WITH rfm AS (
+    SELECT
+        user_id,
+        COUNT(*)                          AS freq,
+        MAX(order_date)                   AS last_order,
+        ROUND(SUM(actual_payment),2)      AS amount
+    FROM orders
+    WHERE order_status IN ('已付款','已发货','已收货','已完成')
+    GROUP BY user_id
+)
+SELECT
+    u.user_id,
+    u.member_level,
+    f.consumption_level,
+    rfm.freq,
+    DATEDIFF(CURDATE(), rfm.last_order)   AS recency_days,
+    rfm.amount,
+    CASE
+        WHEN rfm.freq >= 3 AND rfm.amount >= (
+                SELECT ROUND(AVG(amount)) FROM rfm
+             ) THEN 'V-价值'
+        WHEN rfm.freq >= 2 THEN 'P-潜力'
+        ELSE 'S-沉睡/低活跃'
+    END AS rfm_seg
+FROM rfm
+JOIN users         u ON u.user_id = rfm.user_id
+JOIN user_features f ON f.user_id = rfm.user_id
+ORDER BY rfm.amount DESC;
+
+-- ------------------------------------------------------------------------
+-- 8) 跨表对账（数据质量校验）：订单实付合计 vs 用户特征表 total_spent
+--    用途：发现"库内明细与预聚合特征表"不一致的用户 → 排查数据问题。
+-- ------------------------------------------------------------------------
+SELECT
+    u.user_id,
+    uf.total_spent  AS feat_total_spent,
+    COALESCE(s.actual_sum, 0) AS orders_actual_sum,
+    ROUND(uf.total_spent - COALESCE(s.actual_sum, 0), 2) AS diff
+FROM users u
+JOIN user_features uf ON uf.user_id = u.user_id
+LEFT JOIN (
+    SELECT user_id, ROUND(SUM(actual_payment), 2) AS actual_sum
+    FROM orders
+    WHERE order_status IN ('已付款','已发货','已收货','已完成')
+    GROUP BY user_id
+) s ON s.user_id = u.user_id
+WHERE ABS(uf.total_spent - COALESCE(s.actual_sum, 0)) > 0.01
+ORDER BY diff DESC
+LIMIT 20;
+
+
