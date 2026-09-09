@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from scipy import stats
 
 ENGINE = create_engine(
-    "mysql+pymysql://root:LJJ20050412.@127.0.0.1:3306/taobao_data?charset=utf8mb4"
+    "mysql+pymysql://root:          @127.0.0.1:3306/taobao_data?charset=utf8mb4"
 )
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 IMG_DIR = os.path.join(OUT_DIR, "imgs")
