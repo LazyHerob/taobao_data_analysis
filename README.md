@@ -137,7 +137,7 @@ pip install pandas numpy sqlalchemy pymysql scikit-learn scipy matplotlib
 编辑 [`Python_input.py`](./Python_input.py) 顶部的配置区：
 
 ```python
-MYSQL_PWD = "你的数据库密码"   # 请改为你自己的密码，勿提交真实凭据
+MYSQL_PWD = "数据库密码" 
 SQL_CODE_PATH = r"...\taobao_data_analysis\sql代码"   # 改为你本机绝对路径
 BASE_PATH     = r"...\taobao_data_analysis\taobao_data"
 EXECUTE_SQL_FIRST = True        # True = 先执行 sql代码 建表再导入
@@ -215,7 +215,6 @@ python ops_plan.py               # 任务5：运营方案（会读取任务3 的
 2. **绝对路径**：导入脚本内含本机绝对路径，换环境需按上文修改。
 3. **数据性质**：数据来源于阿里云天池公开数据集并经衍生加工，为方法演示用途；报告中的数值（如过高的浏览→成交率）不代表真实业务，重点在方法。
 4. **模型范围**：当前使用随机森林作基线；如需更强性能可替换为 LightGBM/XGBoost + 超参搜索 + 交叉验证（见报告"后续方向"）。
-5. **PBIX 看板**：仓库根目录的 `淘宝用户消费数据看板.pbix` 为同主题 Power BI 可视化（报表层），与本项目分析链路相互独立。
 
 ---
 
